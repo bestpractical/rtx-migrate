@@ -1,0 +1,45 @@
+#!/usr/bin/perl -w
+use strict;
+use warnings;
+
+### after: use lib qw(@RT_LIB_PATH@);
+use lib qw(/opt/rt4/local/lib /opt/rt4/lib);
+
+use RT;
+BEGIN { RT::LoadConfig(); RT::Init(); }
+
+use Getopt::Long;
+
+my %OPT;
+GetOptions(
+    \%OPT,
+    "preserve-tickets|t!",
+    "originalid|i=s",
+);
+
+use RT::Importer;
+my $import = RT::Importer->new(
+    PreserveTicketIds => $OPT{'preserve-tickets'},
+    OriginalId        => $OPT{originalid},
+);
+
+if ($OPT{originalid}) {
+    my $cf = RT::CustomField->new( RT->SystemUser );
+    $cf->LoadByName( Queue => 0, Name => $OPT{originalid} );
+    unless ($cf->Id) {
+        warn "Failed to find global CF named $OPT{originalid} -- creating one";
+        $cf->Create(
+            Queue => 0,
+            Name  => $OPT{originalid},
+            Type  => 'FreeformSingle',
+        );
+    }
+}
+
+my @files = map {-d $_ ? <$_/*.dat> : $_} @ARGV;
+my %counts = $import->Import( @files );
+
+print "Total object counts:\n";
+for (sort {$counts{$b} <=> $counts{$a}} keys %counts) {
+    printf "%8d %s\n", $counts{$_}, $_;
+}
