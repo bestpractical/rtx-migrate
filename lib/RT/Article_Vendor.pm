@@ -2,11 +2,11 @@ package RT::Article;
 use strict;
 use warnings;
 
-sub Dependencies {
+sub FindDependencies {
     my $self = shift;
     my ($walker, $deps) = @_;
 
-    $self->SUPER::Dependencies($walker, $deps);
+    $self->SUPER::FindDependencies($walker, $deps);
     $deps->Add( out => $self->ClassObj );
     $deps->Add( in => $self->Topics );
 }

@@ -2,11 +2,11 @@ package RT::Link;
 use strict;
 use warnings;
 
-sub Dependencies {
+sub FindDependencies {
     my $self = shift;
     my ($walker, $deps) = @_;
 
-    $self->SUPER::Dependencies($walker, $deps);
+    $self->SUPER::FindDependencies($walker, $deps);
 
     $deps->Add( out => $self->BaseObj )   if $self->BaseObj   and $self->BaseObj->id;
     $deps->Add( out => $self->TargetObj ) if $self->TargetObj and $self->TargetObj->id;

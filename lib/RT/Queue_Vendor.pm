@@ -2,11 +2,11 @@ package RT::Queue;
 use strict;
 use warnings;
 
-sub Dependencies {
+sub FindDependencies {
     my $self = shift;
     my ($walker, $deps) = @_;
 
-    $self->SUPER::Dependencies($walker, $deps);
+    $self->SUPER::FindDependencies($walker, $deps);
 
     # Queue role groups( Cc, AdminCc )
     my $objs = RT::Groups->new( $self->CurrentUser );

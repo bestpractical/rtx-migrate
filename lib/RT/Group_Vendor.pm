@@ -21,11 +21,11 @@ sub InstanceObj {
     return $obj;
 }
 
-sub Dependencies {
+sub FindDependencies {
     my $self = shift;
     my ($walker, $deps) = @_;
 
-    $self->SUPER::Dependencies($walker, $deps);
+    $self->SUPER::FindDependencies($walker, $deps);
 
     my $instance = $self->InstanceObj;
     $deps->Add( out => $instance ) if $instance;

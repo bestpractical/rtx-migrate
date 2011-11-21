@@ -8,11 +8,11 @@ sub UID {
     return "@{[ref $self]}-@{[$self->Name]}";
 }
 
-sub Dependencies {
+sub FindDependencies {
     my $self = shift;
     my ($walker, $deps) = @_;
 
-    $self->SUPER::Dependencies($walker, $deps);
+    $self->SUPER::FindDependencies($walker, $deps);
 
     # ACL equivalence group
     my $objs = RT::Groups->new( $self->CurrentUser );

@@ -2,11 +2,11 @@ package RT::Class;
 use strict;
 use warnings;
 
-sub Dependencies {
+sub FindDependencies {
     my $self = shift;
     my ($walker, $deps) = @_;
 
-    $self->SUPER::Dependencies($walker, $deps);
+    $self->SUPER::FindDependencies($walker, $deps);
 
     my $articles = RT::Articles->new( $self->CurrentUser );
     $articles->Limit( FIELD => "Class", VALUE => $self->Id );
