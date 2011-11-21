@@ -20,7 +20,7 @@ GetOptions(
     "help|?",
 
     "directory|d=s",
-    "force!",
+    "force|f!",
     "size|s=i",
 
     "users!",
