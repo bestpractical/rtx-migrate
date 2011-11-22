@@ -21,8 +21,10 @@ lib/RT/DependencyWalker.pm
 lib/RT/DependencyWalker/Dependencies.pm
 lib/RT/Group_Vendor.pm
 lib/RT/GroupMember_Vendor.pm
-lib/RT/Importer.pm
 lib/RT/Link_Vendor.pm
+lib/RT/Migrate.pm
+lib/RT/Migrate/Importer.pm
+lib/RT/Migrate/Serializer.pm
 lib/RT/ObjectClass_Vendor.pm
 lib/RT/ObjectCustomField_Vendor.pm
 lib/RT/ObjectCustomFieldValue_Vendor.pm
@@ -33,7 +35,6 @@ lib/RT/Record_Vendor.pm
 lib/RT/Scrip_Vendor.pm
 lib/RT/ScripAction_Vendor.pm
 lib/RT/ScripCondition_Vendor.pm
-lib/RT/Serializer.pm
 lib/RT/System_Vendor.pm
 lib/RT/Template_Vendor.pm
 lib/RT/Ticket_Vendor.pm
