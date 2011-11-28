@@ -107,7 +107,7 @@ sub PreInflate {
     my $class = shift;
     my ($importer, $uid, $data) = @_;
 
-    my $ca = $class->_ClassAccessible;
+    my $ca = $class->_ClassAccessible || $class->_CoreAccessible;
     my %ca = %{ $ca };
     if ($data->{Object} and not $ca{Object}) {
         my $ref_uid = ${ delete $data->{Object} };
