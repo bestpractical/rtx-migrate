@@ -11,11 +11,15 @@ index 8d70af1..f1e27cc 100644
  
      # on a cold server (just after restart) people could have an object
      # in the session, as we deserialize it so we never call constructor
-@@ -446,6 +448,7 @@ sub InitClasses {
+@@ -446,6 +448,11 @@ sub InitClasses {
          RT::ObjectCustomField
          RT::ObjectCustomFieldValue
          RT::Attribute
 +        RT::Link
++        RT::Topic
++        RT::Class
++        RT::Article
++        RT::ObjectTopic
      );
  
      if ( $args{'Heavy'} ) {
