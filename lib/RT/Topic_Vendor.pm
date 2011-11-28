@@ -8,11 +8,15 @@ sub FindDependencies {
 
     $self->SUPER::FindDependencies($walker, $deps);
     $deps->Add( out => $self->ParentObj );
-    $deps->Add( in => $self->Children );
+    $deps->Add( in  => $self->Children );
+    $deps->Add( out => $self->Object );
+}
 
-    my $obj = $self->ObjectType->new( $self->CurrentUser );
-    $obj->Load( $self->ObjectId );
-    $deps->Add( out => $obj );
+sub Object {
+    my $self  = shift;
+    my $Object = $self->__Value('ObjectType')->new( $self->CurrentUser );
+    $Object->Load( $self->__Value('ObjectId') );
+    return $Object;
 }
 
 1;
