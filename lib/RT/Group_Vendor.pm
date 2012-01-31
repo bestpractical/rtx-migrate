@@ -52,6 +52,7 @@ sub Serialize {
 
     $store{Disabled} = $self->PrincipalObj->Disabled;
     $store{Principal} = $self->PrincipalObj->UID;
+    $store{PrincipalId} = $self->PrincipalObj->Id;
     return %store;
 }
 
@@ -60,6 +61,7 @@ sub PreInflate {
     my ($importer, $uid, $data) = @_;
 
     my $principal_uid = delete $data->{Principal};
+    my $principal_id  = delete $data->{PrincipalId};
     my $disabled      = delete $data->{Disabled};
 
     # Inflate refs into their IDs
@@ -105,11 +107,16 @@ sub PreInflate {
     my ($id) = $principal->Create(
         PrincipalType => 'Group',
         Disabled => $disabled,
-        ObjectId => 0
+        ObjectId => 0,
+        ($data->{id} and $principal_id)
+             ? (Id => $principal_id) : (),
     );
-    $principal->__Set(Field => 'ObjectId', Value => $id);
     $importer->Resolve( $principal_uid => ref($principal), $id );
-    $data->{id} = $id;
+    $importer->Postpone(
+        for => $uid,
+        uid => $principal_uid,
+        column => "ObjectId",
+    );
 
     return 1;
 }
