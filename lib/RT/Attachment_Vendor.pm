@@ -10,6 +10,16 @@ sub FindDependencies {
     $deps->Add( out => $self->TransactionObj );
 }
 
+sub Serialize {
+    my $self = shift;
+    my %store = $self->SUPER::Serialize;
+
+    $store{Content} = $self->Content;
+    delete $store{ContentEncoding};
+
+    return %store;
+}
+
 sub PreInflate {
     my $class = shift;
 
