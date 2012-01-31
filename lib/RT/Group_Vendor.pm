@@ -50,9 +50,6 @@ sub Serialize {
     my $instance = $self->InstanceObj;
     $store{Instance} = \($instance->UID) if $instance;
 
-    $store{Name} = "$RT::Organization: $store{Name}"
-        if $self->Domain eq "UserDefined";
-
     $store{Disabled} = $self->PrincipalObj->Disabled;
     $store{Principal} = $self->PrincipalObj->UID;
     return %store;
@@ -90,6 +87,7 @@ sub PreInflate {
         $data->{Name} = 'User '. $data->{Instance};
         $data->{Description} = 'ACL equiv. for user '.$data->{Instance};
     } elsif ($data->{Domain} eq "UserDefined") {
+        $data->{Name} = $importer->Qualify($data->{Name});
         $obj->LoadUserDefinedGroup( $data->{Name} );
         if ($obj->Id) {
             $importer->MergeValues($obj, $data);
