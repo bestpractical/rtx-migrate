@@ -46,6 +46,7 @@ sub FindDependencies {
         or $self->isa("RT::Article") )
     {
         $objs = $self->CustomFieldValues; # Actually OCFVs
+        $objs->{find_expired_rows} = 1;
         $deps->Add( in => $objs );
     }
 
