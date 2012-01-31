@@ -26,7 +26,7 @@ sub PreInflate {
     my ($importer, $uid, $data) = @_;
 
     for my $dir (qw/Base Target/) {
-        my $uid_ref = delete $data->{$dir};
+        my $uid_ref = $data->{$dir};
         next unless $uid_ref and ref $uid_ref;
 
         my $to_uid = ${ $uid_ref };
