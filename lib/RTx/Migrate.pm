@@ -30,7 +30,8 @@ or add C<RTx::Migrate> to your existing C<@Plugins> line.
 
 =item Patch RT
 
-You will need to apply the provided 'rt.patch' file.  This is done via:
+If you are running RT 4.0.4 or lower, you will need to apply the provided
+'rt.patch' file.  This is done via:
 
     (cd /opt/rt4; patch -p1) < rt.patch
 
