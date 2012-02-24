@@ -11,3 +11,5 @@ README
 *.bak
 *.swp
 /MYMETA.*
+/sbin/rt-importer
+/sbin/rt-serializer
