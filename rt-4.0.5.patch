@@ -1,0 +1,24 @@
+From ad7444222aab13481f89e9969a0f54589c561359 Mon Sep 17 00:00:00 2001
+From: Thomas Sibley <trs@bestpractical.com>
+Date: Fri, 24 Feb 2012 11:11:11 -0500
+Subject: [PATCH] Load RT::Links on start
+
+---
+ lib/RT.pm |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/lib/RT.pm b/lib/RT.pm
+index 025874d..4b14d1e 100644
+--- a/lib/RT.pm
++++ b/lib/RT.pm
+@@ -415,6 +415,7 @@ sub InitClasses {
+     require RT::Approval;
+     require RT::Lifecycle;
+     require RT::Link;
++    require RT::Links;
+     require RT::Article;
+     require RT::Articles;
+     require RT::Class;
+-- 
+1.7.9
+

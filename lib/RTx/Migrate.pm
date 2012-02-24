@@ -35,6 +35,11 @@ If you are running RT 4.0.4 or lower, you will need to apply the provided
 
     (cd /opt/rt4; patch -p1) < rt.patch
 
+If you are running RT 4.0.5, you need to apply the provided 'rt-4.0.5.patch'
+file.  This is done via:
+
+    (cd /opt/rt4; patch -p1) < rt-4.0.5.patch
+
 =item Export your database
 
     /opt/rt4/local/plugins/RTx-Migrate/sbin/rt-serializer
