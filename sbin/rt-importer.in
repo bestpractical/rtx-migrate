@@ -23,8 +23,10 @@ GetOptions(
     "list|l!",
 
     "resume!",
-    "clone|C!",
+    "clone|C",
     "originalid|i=s",
+
+    "dump=s@",
 ) or Pod::Usage::pod2usage();
 
 Pod::Usage::pod2usage(-verbose => 1) if $OPT{help};
@@ -47,13 +49,24 @@ if (-f "$dir/rt-serialized" and -t STDOUT and not $OPT{quiet}) {
     );
 }
 
+if ($OPT{dump}) {
+    die "Dumping objects only works in conjunction with --list\n"
+        unless $OPT{list};
+
+    $OPT{dump} = [ split /,/, join(',', @{$OPT{dump}}) ];
+}
+
 my $statefile = "$dir/partial-import";
 $import = RT::Migrate::Importer->new(
     Clone       => $OPT{clone},
     OriginalId  => $OPT{originalid},
     Progress    => $progress,
     Statefile   => $statefile,
+    DumpObjects => $OPT{dump},
 );
+
+my $log = RT::Migrate::setup_logging( $dir => 'importer.log' );
+print "Logging warnings and errors to $log\n" if $log;
 
 my %counts;
 if ($OPT{list}) {
@@ -80,6 +93,26 @@ if (@missing) {
     warn "    $_\n" for @missing;
 }
 
+my @invalid = $import->Invalid;
+if (@invalid) {
+    warn "The following UIDs (serialized => imported) referred to objects missing from the original database:\n";
+    for my $info (@invalid) {
+        my $uid = delete $info->{uid};
+        my $obj = $import->LookupObj($uid);
+        warn sprintf "    %s => %s (%s)\n",
+                $uid,
+                ($obj && $obj->Id ? $obj->UID : '(not imported)'),
+                join(", ", map  { "$_ => $info->{$_}" }
+                           grep { defined $info->{$_} }
+                                sort keys %$info);
+    }
+}
+
+if ($log and -s $log) {
+    print STDERR "\n! Some warnings or errors occurred during import."
+                ."\n! Please see $log for details.\n\n";
+}
+
 exit @missing;
 
 =head1 NAME
@@ -101,6 +134,10 @@ resumed by re-running the importer.
 
 =over
 
+=item B<--list>
+
+Print a summary of the data contained in the dump.
+
 =item B<--clone>
 
 Insert all of the data as an exact clone of the original RT instance.
@@ -111,6 +148,13 @@ This requires that the database schema be created, but contain no data.
 Places the original ticket organization and ID into a global custom
 field with the given name.  If no global ticket custom field with that
 name is found in the current database, it will create one.
+
+=item B<--dump> I<class>[,I<class>]
+
+Prints L<Data::Dumper> representations of the objects of type I<class> in the
+serialized data.  This is mostly useful for debugging.
+
+Works only in conjunction with C<--list>.
 
 =back
 
