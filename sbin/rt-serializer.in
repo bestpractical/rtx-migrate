@@ -104,6 +104,8 @@ for (sort {$counts{$b} <=> $counts{$a}} keys %counts) {
 if ($log and -s $log) {
     print STDERR "\n! Some warnings or errors occurred during serialization."
                 ."\n! Please see $log for details.\n\n";
+} else {
+    unlink $log;
 }
 
 sub estimate {
@@ -158,6 +160,7 @@ sub gnuplot {
         if ($? == 0 and $gnuplot) {
             $gnuplot =~ s/^(\s*\n)//;
             print $gnuplot;
+            unlink $file;
         } else {
             warn "Couldn't run gnuplot (\$? == $?): $!\n";
         }
