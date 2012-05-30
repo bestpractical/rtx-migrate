@@ -10,7 +10,7 @@ use RT;
 BEGIN { RT::LoadConfig(); RT::Init(); }
 
 use RT::Migrate;
-use RT::Migrate::Importer;
+use RT::Migrate::Importer::File;
 use Getopt::Long;
 use Pod::Usage qw//;
 use Time::HiRes qw//;
@@ -70,7 +70,7 @@ elsif ($OPT{'ignore-errors'}) {
     };
 }
 
-my $import = RT::Migrate::Importer->new(
+my $import = RT::Migrate::Importer::File->new(
     Directory   => $dir,
     OriginalId  => $OPT{originalid},
     DumpObjects => $OPT{dump},
