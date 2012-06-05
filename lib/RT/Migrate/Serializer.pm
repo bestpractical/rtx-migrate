@@ -279,7 +279,8 @@ sub InitStream {
 }
 
 sub NextPage {
-    my ($self, $collection, $last) = @_;
+    my $self = shift;
+    my ($collection, $last) = @_;
 
     $last ||= 0;
 
