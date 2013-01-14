@@ -9,6 +9,9 @@ inc/Module/Install/RTx.pm
 inc/Module/Install/Substitute.pm
 inc/Module/Install/Win32.pm
 inc/Module/Install/WriteAll.pm
+incremental/README
+incremental/Record_Local.pm
+incremental/schema.mysql
 lib/RT/ACE_Vendor.pm
 lib/RT/Article_Vendor.pm
 lib/RT/Attachment_Vendor.pm
@@ -24,12 +27,16 @@ lib/RT/GroupMember_Vendor.pm
 lib/RT/Link_Vendor.pm
 lib/RT/Migrate.pm
 lib/RT/Migrate/Importer.pm
+lib/RT/Migrate/Importer/File.pm
+lib/RT/Migrate/Incremental.pm
 lib/RT/Migrate/Serializer.pm
+lib/RT/Migrate/Serializer/File.pm
+lib/RT/Migrate/Serializer/IncrementalRecord.pm
+lib/RT/Migrate/Serializer/IncrementalRecords.pm
 lib/RT/ObjectClass_Vendor.pm
 lib/RT/ObjectCustomField_Vendor.pm
 lib/RT/ObjectCustomFieldValue_Vendor.pm
 lib/RT/ObjectTopic_Vendor.pm
-lib/RT/Principal_Vendor.pm
 lib/RT/Queue_Vendor.pm
 lib/RT/Record_Vendor.pm
 lib/RT/Scrip_Vendor.pm
@@ -46,6 +53,9 @@ Makefile.PL
 MANIFEST			This list of files
 META.yml
 README
+rt-4.0.5.patch
 rt.patch
 sbin/rt-importer
+sbin/rt-importer.in
 sbin/rt-serializer
+sbin/rt-serializer.in

@@ -45,7 +45,8 @@ sub FindDependencies {
 
 sub Serialize {
     my $self = shift;
-    my %store = $self->SUPER::Serialize;
+    my %args = (@_);
+    my %store = $self->SUPER::Serialize(@_);
 
     my $instance = $self->InstanceObj;
     $store{Instance} = \($instance->UID) if $instance;
@@ -108,10 +109,9 @@ sub PreInflate {
         PrincipalType => 'Group',
         Disabled => $disabled,
         ObjectId => 0,
-        ($data->{id} and $principal_id)
-             ? (Id => $principal_id) : (),
     );
     $importer->Resolve( $principal_uid => ref($principal), $id );
+
     $importer->Postpone(
         for => $uid,
         uid => $principal_uid,

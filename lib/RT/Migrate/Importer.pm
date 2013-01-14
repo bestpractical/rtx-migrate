@@ -53,6 +53,7 @@ use warnings;
 
 use Storable qw//;
 use File::Spec;
+use Carp qw/carp/;
 
 sub new {
     my $class = shift;
@@ -64,18 +65,84 @@ sub new {
 sub Init {
     my $self = shift;
     my %args = (
-        Clone       => undef,
         OriginalId  => undef,
         Progress    => undef,
         Statefile   => undef,
+        DumpObjects => undef,
+        HandleError => undef,
         @_,
     );
 
     # Should we attempt to preserve record IDs as they are created?
-    if ($self->{Clone} = $args{Clone}) {
-        die "RT already contains data; overwriting will not work\n"
-            if RT->SystemUser->Id;
-    } elsif ($self->{OriginalId} = $args{OriginalId}) {
+    $self->{OriginalId} = $args{OriginalId};
+
+    $self->{Progress} = $args{Progress};
+
+    $self->{HandleError} = sub { 0 };
+    $self->{HandleError} = $args{HandleError}
+        if $args{HandleError} and ref $args{HandleError} eq 'CODE';
+
+    if ($args{DumpObjects}) {
+        require Data::Dumper;
+        $self->{DumpObjects} = { map { $_ => 1 } @{$args{DumpObjects}} };
+    }
+
+    # Objects we've created
+    $self->{UIDs} = {};
+
+    # Columns we need to update when an object is later created
+    $self->{Pending} = {};
+
+    # Objects missing from the source database before serialization
+    $self->{Invalid} = [];
+
+    # What we created
+    $self->{ObjectCount} = {};
+
+    # To know what global CFs need to be unglobal'd and applied to what
+    $self->{NewQueues} = [];
+    $self->{NewCFs} = [];
+}
+
+sub Metadata {
+    my $self = shift;
+    return $self->{Metadata};
+}
+
+sub LoadMetadata {
+    my $self = shift;
+    my ($data) = @_;
+
+    return if $self->{Metadata};
+    $self->{Metadata} = $data;
+
+    die "Incompatible format version: ".$data->{Format}
+        if $data->{Format} ne "0.8";
+
+    $self->{Organization} = $data->{Organization};
+    $self->{Clone}        = $data->{Clone};
+    $self->{Incremental}  = $data->{Incremental};
+    $self->{Files}        = $data->{Files} if $data->{Final};
+}
+
+sub InitStream {
+    my $self = shift;
+
+    die "Stream initialized after objects have been recieved!"
+        if keys %{ $self->{UIDs} };
+
+    die "Cloning does not support importing the Original Id separately\n"
+        if $self->{OriginalId} and $self->{Clone};
+
+    die "RT already contains data; overwriting will not work\n"
+        if ($self->{Clone} and not $self->{Incremental})
+            and RT->SystemUser->Id;
+
+    # Basic facts of life, as a safety net
+    $self->Resolve( RT->System->UID => ref RT->System, RT->System->Id );
+    $self->SkipTransactions( RT->System->UID );
+
+    if ($self->{OriginalId}) {
         # Where to shove the original ticket ID
         my $cf = RT::CustomField->new( RT->SystemUser );
         $cf->LoadByName( Queue => 0, Name => $self->{OriginalId} );
@@ -88,27 +155,6 @@ sub Init {
             );
         }
     }
-
-    $self->{Progress}  = $args{Progress};
-    $self->{Statefile} = $args{Statefile};
-
-    # Objects we've created
-    $self->{UIDs} = {};
-
-    # Columns we need to update when an object is later created
-    $self->{Pending} = {};
-
-    # What we created
-    $self->{ObjectCount} = {};
-
-    # To know what global CFs need to be unglobal'd and applied to what
-    $self->{NewQueues} = [];
-    $self->{NewCFs} = [];
-
-    # Basic facts of life, as a safety net
-    $self->Resolve( RT->System->UID => ref RT->System, RT->System->Id );
-    $self->SkipTransactions( RT->System->UID )
-        unless $self->{Clone};
 }
 
 sub Resolve {
@@ -118,7 +164,7 @@ sub Resolve {
     return unless $self->{Pending}{$uid};
 
     for my $ref (@{$self->{Pending}{$uid}}) {
-        my ($pclass, $pid) = @{ $self->{UIDs}{ $ref->{uid} } };
+        my ($pclass, $pid) = @{ $self->Lookup( $ref->{uid} ) };
         my $obj = $pclass->new( RT->SystemUser );
         $obj->LoadByCols( Id => $pid );
         $obj->__Set(
@@ -140,6 +186,10 @@ sub Resolve {
 sub Lookup {
     my $self = shift;
     my ($uid) = @_;
+    unless (defined $uid) {
+        carp "Tried to lookup an undefined UID";
+        return;
+    }
     return $self->{UIDs}{$uid};
 }
 
@@ -166,12 +216,18 @@ sub Postpone {
         @_,
     );
     my $uid = delete $args{for};
-    push @{$self->{Pending}{$uid}}, \%args;
+
+    if (defined $uid) {
+        push @{$self->{Pending}{$uid}}, \%args;
+    } else {
+        push @{$self->{Invalid}}, \%args;
+    }
 }
 
 sub SkipTransactions {
     my $self = shift;
     my ($uid) = @_;
+    return if $self->{Clone};
     $self->{SkipTransactions}{$uid} = 1;
 }
 
@@ -242,17 +298,32 @@ sub Create {
     my $self = shift;
     my ($class, $uid, $data) = @_;
 
-    # Remove the ticket id, unless we specifically want it kept
-    delete $data->{id} unless $self->{Clone};
-
-    return unless $class->PreInflate( $self, $uid, $data );
+    # Use a simpler pre-inflation if we're cloning
+    if ($self->{Clone}) {
+        $class->RT::Record::PreInflate( $self, $uid, $data );
+    } else {
+        # Non-cloning always wants to make its own id
+        delete $data->{id};
+        return unless $class->PreInflate( $self, $uid, $data );
+    }
 
     my $obj = $class->new( RT->SystemUser );
-    my ($id, $msg) = $obj->DBIx::SearchBuilder::Record::Create(
-        %{$data}
-    );
-    die "Failed to create $uid: $msg\n" . Data::Dumper::Dumper($data) . "\n"
-        unless $id;
+    my ($id, $msg) = eval {
+        # catch and rethrow on the outside so we can provide more info
+        local $SIG{__DIE__};
+        $obj->DBIx::SearchBuilder::Record::Create(
+            %{$data}
+        );
+    };
+    if (not $id or $@) {
+        $msg ||= ''; # avoid undef
+        my $err = "Failed to create $uid: $msg $@\n" . Data::Dumper::Dumper($data) . "\n";
+        if (not $self->{HandleError}->($self, $err)) {
+            die $err;
+        } else {
+            return;
+        }
+    }
 
     $self->{ObjectCount}{$class}++;
     $self->Resolve( $uid => $class, $id );
@@ -265,13 +336,9 @@ sub Create {
     return $obj;
 }
 
-sub Import {
+sub ReadStream {
     my $self = shift;
-    my ($dir) = @_;
-
-    $self->{Files} = [ map {File::Spec->rel2abs($_)} <$dir/*.dat> ];
-
-    $self->RestoreState( $self->{Statefile} );
+    my ($fh) = @_;
 
     no warnings 'redefine';
     local *RT::Ticket::Load = sub {
@@ -281,69 +348,81 @@ sub Import {
         return $self->Id;
     };
 
-    local $SIG{  INT  } = sub { $self->{INT} = 1 };
-    local $SIG{__DIE__} = sub { print STDERR "\n", @_; $self->SaveState; exit 1 };
+    my $loaded = Storable::fd_retrieve($fh);
 
-    $self->{Progress}->(undef) if $self->{Progress};
-    while (@{$self->{Files}}) {
-        $self->{Filename} = shift @{$self->{Files}};
-        open(my $fh, "<", $self->{Filename})
-            or die "Can't read $self->{Filename}: $!";
-        if ($self->{Seek}) {
-            seek($fh, $self->{Seek}, 0)
-                or die "Can't seek to $self->{Seek} in $self->{Filename}";
-            $self->{Seek} = undef;
-        }
-        while (not eof($fh)) {
-            $self->{Position} = tell($fh);
-
-            # Stop when we're at a good stopping point
-            die "Caught interrupt, quitting.\n" if $self->{INT};
-
-            my $loaded = Storable::fd_retrieve($fh);
-
-            # Scalar references are the back-compat way we store the
-            # organization value
-            if (ref $loaded eq "SCALAR") {
-                $self->{Organization} = $$loaded;
-                next;
-            }
-
-            my ($class, $uid, $data) = @{$loaded};
-
-            # If it's a queue, store its ID away, as we'll need to know
-            # it to split global CFs into non-global across those
-            # fields.  We do this before inflating, so that queues which
-            # got merged still get the CFs applied
-            push @{$self->{NewQueues}}, $uid
-                if $class eq "RT::Queue";
-
-            my $obj = $self->Create( $class, $uid, $data );
-            next unless $obj;
-
-            # If it's a ticket, we might need to create a
-            # TicketCustomField for the previous ID
-            if ($class eq "RT::Ticket" and $self->{OriginalId}) {
-                my ($org, $origid) = $uid =~ /^RT::Ticket-(.*)-(\d+)$/;
-                my ($id, $msg) = $obj->AddCustomFieldValue(
-                    Field             => $self->{OriginalId},
-                    Value             => "$org:$origid",
-                    RecordTransaction => 0,
-                );
-                warn "Failed to add custom field to $uid: $msg"
-                    unless $id;
-            }
-
-            # If it's a CF, we don't know yet if it's global (the OCF
-            # hasn't been created yet) to store away the CF for later
-            # inspection
-            push @{$self->{NewCFs}}, $uid
-                if $class eq "RT::CustomField"
-                    and $obj->LookupType =~ /^RT::Queue/;
-
-            $self->{Progress}->($obj) if $self->{Progress};
-        }
+    # Metadata is stored at the start of the stream as a hashref
+    if (ref $loaded eq "HASH") {
+        $self->LoadMetadata( $loaded );
+        $self->InitStream;
+        return;
     }
+
+    my ($class, $uid, $data) = @{$loaded};
+
+    if ($self->{Incremental}) {
+        my $obj = $class->new( RT->SystemUser );
+        $obj->Load( $data->{id} );
+        if (not $uid) {
+            # undef $uid means "delete it"
+            $obj->Delete;
+            $self->{ObjectCount}{$class}++;
+        } elsif ( $obj->Id ) {
+            # If it exists, update it
+            $class->RT::Record::PreInflate( $self, $uid, $data );
+            $obj->__Set( Field => $_, Value => $data->{$_} )
+                for keys %{ $data };
+            $self->{ObjectCount}{$class}++;
+        } else {
+            # Otherwise, make it
+            $obj = $self->Create( $class, $uid, $data );
+        }
+        $self->{Progress}->($obj) if $obj and $self->{Progress};
+        return;
+    } elsif ($self->{Clone}) {
+        my $obj = $self->Create( $class, $uid, $data );
+        $self->{Progress}->($obj) if $obj and $self->{Progress};
+        return;
+    }
+
+    # If it's a queue, store its ID away, as we'll need to know
+    # it to split global CFs into non-global across those
+    # fields.  We do this before inflating, so that queues which
+    # got merged still get the CFs applied
+    push @{$self->{NewQueues}}, $uid
+        if $class eq "RT::Queue";
+
+    my $origid = $data->{id};
+    my $obj = $self->Create( $class, $uid, $data );
+    return unless $obj;
+
+    # If it's a ticket, we might need to create a
+    # TicketCustomField for the previous ID
+    if ($class eq "RT::Ticket" and $self->{OriginalId}) {
+        my ($id, $msg) = $obj->AddCustomFieldValue(
+            Field             => $self->{OriginalId},
+            Value             => $self->Organization . ":$origid",
+            RecordTransaction => 0,
+        );
+        warn "Failed to add custom field to $uid: $msg"
+            unless $id;
+    }
+
+    # If it's a CF, we don't know yet if it's global (the OCF
+    # hasn't been created yet) to store away the CF for later
+    # inspection
+    push @{$self->{NewCFs}}, $uid
+        if $class eq "RT::CustomField"
+            and $obj->LookupType =~ /^RT::Queue/;
+
+    $self->{Progress}->($obj) if $self->{Progress};
+}
+
+sub CloseStream {
+    my $self = shift;
+
+    $self->{Progress}->(undef, 'force') if $self->{Progress};
+
+    return if $self->{Clone};
 
     # Take global CFs which we made and make them un-global
     my @queues = grep {$_} map {$self->LookupObj( $_ )} @{$self->{NewQueues}};
@@ -354,45 +433,8 @@ sub Import {
     }
     $self->{NewQueues} = [];
     $self->{NewCFs} = [];
-
-
-    # Return creation counts
-    return $self->ObjectCount;
 }
 
-sub List {
-    my $self = shift;
-    my ($dir) = @_;
-
-    my %found = ( "RT::System" => 1 );
-    for my $filename (map {File::Spec->rel2abs($_)} <$dir/*.dat> ) {
-        open(my $fh, "<", $filename)
-            or die "Can't read $filename: $!";
-        while (not eof($fh)) {
-            my $loaded = Storable::fd_retrieve($fh);
-            if (ref $loaded eq "SCALAR") {
-                warn "Dump contains files from Multiple RT instances!\n"
-                    if defined $self->{Organization}
-                        and $self->{Organization} ne $$loaded;
-                $self->{Organization} = $$loaded;
-                next;
-            }
-
-            my ($class, $uid, $data) = @{$loaded};
-            $self->{ObjectCount}{$class}++;
-            $found{$uid} = 1;
-            delete $self->{Pending}{$uid};
-            for (grep {ref $data->{$_}} keys %{$data}) {
-                my $uid_ref = ${ $data->{$_} };
-                next if $found{$uid_ref};
-                next if $uid_ref =~ /^RT::Principal-/;
-                push @{$self->{Pending}{$uid_ref} ||= []}, {uid => $uid};
-            }
-        }
-    }
-
-    return $self->ObjectCount;
-}
 
 sub ObjectCount {
     my $self = shift;
@@ -405,48 +447,21 @@ sub Missing {
         : keys %{ $self->{Pending} };
 }
 
+sub Invalid {
+    my $self = shift;
+    return wantarray ? sort { $a->{uid} cmp $b->{uid} } @{ $self->{Invalid} }
+                     : $self->{Invalid};
+}
+
 sub Organization {
     my $self = shift;
     return $self->{Organization};
 }
 
-sub RestoreState {
+sub Progress {
     my $self = shift;
-    my ($statefile) = @_;
-    return unless $statefile and -f $statefile;
-
-    my $state = Storable::retrieve( $self->{Statefile} );
-    $self->{$_} = $state->{$_} for keys %{$state};
-    unlink $self->{Statefile};
-
-    print STDERR "Resuming partial import...\n";
-    sleep 2;
-    return 1;
-}
-
-sub SaveState {
-    my $self = shift;
-
-    my %data;
-    unshift @{$self->{Files}}, $self->{Filename};
-    $self->{Seek} = $self->{Position};
-    $data{$_} = $self->{$_} for
-        qw/Filename Seek Position Files
-           Organization ObjectCount
-           NewQueues NewCFs
-           SkipTransactions Pending
-           UIDs
-           OriginalId Clone
-          /;
-    Storable::nstore(\%data, $self->{Statefile});
-
-    print STDERR <<EOT;
-
-Importer state has been written to the file:
-    $self->{Statefile}
-
-It may be possible to resume the import by re-running rt-importer.
-EOT
+    return defined $self->{Progress} unless @_;
+    return $self->{Progress} = $_[0];
 }
 
 1;

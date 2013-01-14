@@ -107,8 +107,9 @@ sub progress {
     my $offset;
     return sub {
         my $obj = shift;
+        my $force = shift;
         my $now = Time::HiRes::time();
-        return if defined $last_time and $now - $last_time <= $args{every};
+        return if defined $last_time and $now - $last_time <= $args{every} and not $force;
 
         $start = $now unless $start;
         $last_time = $now;
@@ -139,7 +140,7 @@ sub progress {
         }
 
         my $total = 0;
-        $total += $_ for values %counts;
+        $total += $_ for map {$counts{$_}} grep {exists $args{max}{$_}} keys %counts;
         $offset = $total unless defined $offset;
         print "\n", progress_bar(
             label => "Total",
@@ -170,6 +171,22 @@ sub progress {
         $args{bottom}->($elapsed, $rows, $cols);
     }
 
+}
+
+sub setup_logging {
+    my ($dir, $file) = @_;
+
+    $RT::LogToScreen    = 'warning';
+    $RT::LogToFile      = 'warning';
+    $RT::LogDir         = $dir;
+    $RT::LogToFileNamed = $file;
+    $RT::LogStackTraces = 'error';
+
+    undef $RT::Logger;
+    RT->InitLogging();
+
+    my $logger = $RT::Logger->output('file') || $RT::Logger->output("rtlog");
+    return $logger ? $logger->{filename} : undef;
 }
 
 1;

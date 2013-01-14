@@ -2,7 +2,7 @@ use strict;
 use warnings;
 package RTx::Migrate;
 
-our $VERSION = '0.10';
+our $VERSION = '0.12';
 
 =head1 NAME
 
@@ -82,5 +82,29 @@ This is free software, licensed under:
   The GNU General Public License, Version 2, June 1991
 
 =cut
+
+{ my %word = (
+    a     => -4,
+    alpha => -4,
+    b     => -3,
+    beta  => -3,
+    pre   => -2,
+    rc    => -1,
+    head  => 9999,
+);
+sub cmp_version($$) {
+    my ($a, $b) = (@_);
+    my @a = grep defined, map { /^[0-9]+$/? $_ : /^[a-zA-Z]+$/? $word{$_}|| -10 : undef }
+        split /([^0-9]+)/, $a;
+    my @b = grep defined, map { /^[0-9]+$/? $_ : /^[a-zA-Z]+$/? $word{$_}|| -10 : undef }
+        split /([^0-9]+)/, $b;
+    @a > @b
+        ? push @b, (0) x (@a-@b)
+        : push @a, (0) x (@b-@a);
+    for ( my $i = 0; $i < @a; $i++ ) {
+        return $a[$i] <=> $b[$i] if $a[$i] <=> $b[$i];
+    }
+    return 0;
+}}
 
 1;

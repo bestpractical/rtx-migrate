@@ -54,16 +54,16 @@ use warnings;
 use base 'RT::DependencyWalker';
 
 use Storable qw//;
-use DateTime;
+use RTx::Migrate;
+sub cmp_version($$) { RTx::Migrate::cmp_version($_[0],$_[1]) };
+use RT::Migrate::Incremental;
+use RT::Migrate::Serializer::IncrementalRecord;
+use RT::Migrate::Serializer::IncrementalRecords;
 
 sub Init {
     my $self = shift;
 
     my %args = (
-        Directory   => undef,
-        Force       => undef,
-        MaxFileSize => 32,
-
         AllUsers            => 1,
         AllGroups           => 1,
         FollowDeleted       => 1,
@@ -72,22 +72,12 @@ sub Init {
         FollowTickets       => 1,
         FollowACL           => 0,
 
+        Clone       => 0,
+        Incremental => 0,
+
         Verbose => 1,
         @_,
     );
-
-    # Set up the output directory we'll be writing to
-    $args{Directory} = $RT::Organization . ":" . DateTime->now->ymd
-        unless defined $args{Directory};
-    system("rm", "-rf", $args{Directory}) if $args{Force};
-    die "Output directory $args{Directory} already exists"
-        if -d $args{Directory};
-    mkdir $args{Directory}
-        or die "Can't create output directory $args{Directory}: $!\n";
-    $self->{Directory} = delete $args{Directory};
-
-    # How many megabytes each chunk should be, approximitely
-    $self->{MaxFileSize} = delete $args{MaxFileSize};
 
     $self->{Verbose} = delete $args{Verbose};
 
@@ -99,19 +89,134 @@ sub Init {
                   FollowScrips
                   FollowTickets
                   FollowACL
+                  Clone
+                  Incremental
               /;
+
+    $self->{Clone} = 1 if $self->{Incremental};
 
     $self->SUPER::Init(@_, First => "top");
 
     # Keep track of the number of each type of object written out
     $self->{ObjectCount} = {};
 
-    # Which file we're writing to
-    $self->{FileCount} = 1;
-
-    $self->PushBasics;
+    if ($self->{Clone}) {
+        $self->PushAll;
+    } else {
+        $self->PushBasics;
+    }
 }
 
+sub Metadata {
+    my $self = shift;
+
+    # Determine the highest upgrade step that we run
+    my @versions = ($RT::VERSION, keys %RT::Migrate::Incremental::UPGRADES);
+    my ($max) = reverse sort cmp_version @versions;
+
+    return {
+        Format       => "0.8",
+        VersionFrom  => $RT::VERSION,
+        Version      => $max,
+        Organization => $RT::Organization,
+        Clone        => $self->{Clone},
+        Incremental  => $self->{Incremental},
+        ObjectCount  => { $self->ObjectCount },
+        @_,
+    },
+}
+
+sub PushAll {
+    my $self = shift;
+
+    # To keep unique constraints happy, we need to remove old records
+    # before we insert new ones.  This fixes the case where a
+    # GroupMember was deleted and re-added (with a new id, but the same
+    # membership).
+    if ($self->{Incremental}) {
+        my $removed = RT::Migrate::Serializer::IncrementalRecords->new( RT->SystemUser );
+        $removed->Limit( FIELD => "UpdateType", VALUE => 3 );
+        $removed->OrderBy( FIELD => 'id' );
+        $self->PushObj( $removed );
+    }
+    # XXX: This is sadly not sufficient to deal with the general case of
+    # non-id unique constraints, such as queue names.  If queues A and B
+    # existed, and B->C and A->B renames were done, these will be
+    # serialized with A->B first, which will fail because there already
+    # exists a B.
+
+    # Principals first; while we don't serialize these separately during
+    # normal dependency walking (we fold them into users and groups),
+    # having them separate during cloning makes logic simpler.
+    $self->PushCollections(qw(Principals));
+
+    # Users and groups
+    $self->PushCollections(qw(Users Groups GroupMembers));
+
+    # Tickets
+    $self->PushCollections(qw(Queues Tickets Transactions Attachments Links));
+
+    # Articles
+    $self->PushCollections(qw(Articles), map { ($_, "Object$_") } qw(Classes Topics));
+
+    # Custom Fields
+    if (eval "require RT::ObjectCustomFields; 1") {
+        $self->PushCollections(map { ($_, "Object$_") } qw(CustomFields CustomFieldValues));
+    } elsif (eval "require RT::TicketCustomFieldValues; 1") {
+        $self->PushCollections(qw(CustomFields CustomFieldValues TicketCustomFieldValues));
+    }
+
+    # ACLs
+    $self->PushCollections(qw(ACL));
+
+    # Scrips
+    $self->PushCollections(qw(Scrips ScripActions ScripConditions Templates));
+
+    # Attributes
+    $self->PushCollections(qw(Attributes));
+}
+
+sub PushCollections {
+    my $self  = shift;
+
+    for my $type (@_) {
+        my $class = "RT::\u$type";
+
+        eval "require $class; 1" or next;
+        my $collection = $class->new( RT->SystemUser );
+        $collection->FindAllRows;   # be explicit
+        $collection->CleanSlate;    # some collections (like groups and users) join in _Init
+        $collection->UnLimit;
+        $collection->OrderBy( FIELD => 'id' );
+
+        if ($self->{Clone}) {
+            if ($collection->isa('RT::Tickets')) {
+                $collection->{allow_deleted_search} = 1;
+                $collection->IgnoreType; # looking_at_type
+            }
+            elsif ($collection->isa('RT::ObjectCustomFieldValues')) {
+                # FindAllRows (find_disabled_rows) isn't used by OCFVs
+                $collection->{find_expired_rows} = 1;
+            }
+
+            if ($self->{Incremental}) {
+                my $alias = $collection->Join(
+                    ALIAS1 => "main",
+                    FIELD1 => "id",
+                    TABLE2 => "IncrementalRecords",
+                    FIELD2 => "ObjectId",
+                );
+                $collection->DBIx::SearchBuilder::Limit(
+                    ALIAS => $alias,
+                    FIELD => "ObjectType",
+                    VALUE => ref($collection->NewItem),
+                );
+            }
+        }
+
+        $self->PushObj( $collection );
+    }
+}
 
 sub PushBasics {
     my $self = shift;
@@ -146,13 +251,14 @@ sub PushBasics {
     $self->PushObj( $cfs );
 
     # Global attributes
-    my $attributes = RT::System->new( RT->SystemUser )->Attributes;
+    my $attributes = RT::Attributes->new( RT->SystemUser );
+    $attributes->LimitToObject( $RT::System );
     $self->PushObj( $attributes );
 
     # Global ACLs
     if ($self->{FollowACL}) {
         my $acls = RT::ACL->new( RT->SystemUser );
-        $acls->LimitToObject( RT->System );
+        $acls->LimitToObject( $RT::System );
         $self->PushObj( $acls );
     }
 
@@ -164,12 +270,8 @@ sub PushBasics {
         my $templates = RT::Templates->new( RT->SystemUser );
         $templates->LimitToGlobal;
 
-        my $actions = RT::ScripActions->new( RT->SystemUser );
-        $actions->UnLimit;
-
-        my $conditions = RT::ScripConditions->new( RT->SystemUser );
-        $conditions->UnLimit;
-        $self->PushObj( $scrips, $templates, $actions, $conditions );
+        $self->PushObj( $scrips, $templates );
+        $self->PushCollections(qw(ScripActions ScripConditions));
     }
 
     if ($self->{AllUsers}) {
@@ -184,78 +286,88 @@ sub PushBasics {
         $self->PushObj( $groups );
     }
 
-    my $topics = RT::Topics->new( RT->SystemUser );
-    $topics->UnLimit;
+    if (eval "require RT::Articles; 1") {
+        $self->PushCollections(qw(Topics Classes));
+    }
 
-    my $classes = RT::Classes->new( RT->SystemUser );
-    $classes->UnLimit;
-    $self->PushObj( $topics, $classes );
-
-    my $queues = RT::Queues->new( RT->SystemUser );
-    $queues->UnLimit;
-    $self->PushObj( $queues );
+    $self->PushCollections(qw(Queues));
 }
 
-sub Walk {
+sub InitStream {
     my $self = shift;
 
-    # Set up our output file
-    open($self->{Filehandle}, ">", $self->Filename)
-        or die "Can't write to file @{[$self->Filename]}: $!";
+    # Write the initial metadata
+    my $meta = $self->Metadata;
     $! = 0;
-    Storable::nstore_fd( \$RT::Organization, $self->{Filehandle});
-    die "Failed to write to @{[$self->Filename]}: $!" if $!;
-    push @{$self->{Files}}, $self->Filename;
+    Storable::nstore_fd( $meta, $self->{Filehandle} );
+    die "Failed to write metadata: $!" if $!;
 
-    # Walk the objects
-    $self->SUPER::Walk( @_ );
+    return unless cmp_version($meta->{VersionFrom}, $meta->{Version}) < 0;
 
-    # Close everything back up
-    close($self->{Filehandle})
-        or die "Can't close @{[$self->Filename]}: $!";
-    $self->{FileCount}++;
-
-    # Write the summary file
-    Storable::nstore( {
-        files  => [ $self->Files ],
-        counts => { $self->ObjectCount },
-    }, $self->Directory . "/rt-serialized");
-
-    return $self->ObjectCount;
+    my %transforms;
+    for my $v (sort cmp_version keys %RT::Migrate::Incremental::UPGRADES) {
+        for my $ref (keys %{$RT::Migrate::Incremental::UPGRADES{$v}}) {
+            push @{$transforms{$ref}}, $RT::Migrate::Incremental::UPGRADES{$v}{$ref};
+        }
+    }
+    for my $ref (keys %transforms) {
+        # XXX Does not correctly deal with updates of $classref, which
+        # should technically apply all later transforms of the _new_
+        # class.  This is not relevant in the current upgrades, as
+        # RT::ObjectCustomFieldValues do not have interesting later
+        # upgrades if you start from 3.2 (which does
+        # RT::TicketCustomFieldValues -> RT::ObjectCustomFieldValues)
+        $self->{Transform}{$ref} = sub {
+            my ($dat, $classref) = @_;
+            my @extra;
+            for my $c (@{$transforms{$ref}}) {
+                push @extra, $c->($dat, $classref);
+                return @extra if not $$classref;
+            }
+            return @extra;
+        };
+    }
 }
 
-sub Files {
+sub NextPage {
     my $self = shift;
-    return @{ $self->{Files} };
+    my ($collection, $last) = @_;
+
+    $last ||= 0;
+
+    if ($self->{Clone}) {
+        # Clone provides guaranteed ordering by id and with no other id limits
+        # worry about trampling
+
+        # Use DBIx::SearchBuilder::Limit explicitly to avoid shenanigans in RT::Tickets
+        $collection->DBIx::SearchBuilder::Limit(
+            FIELD           => 'id',
+            OPERATOR        => '>',
+            VALUE           => $last,
+            ENTRYAGGREGATOR => 'none', # replaces last limit on this field
+        );
+    } else {
+        # XXX TODO: this could dig around inside the collection to see how it's
+        # limited and do the faster paging above under other conditions.
+        $self->SUPER::NextPage(@_);
+    }
 }
 
-sub Filename {
+sub Process {
     my $self = shift;
-    return sprintf(
-        "%s/%03d.dat",
-        $self->{Directory},
-        $self->{FileCount}
+    my %args = (
+        object => undef,
+        @_
     );
-}
 
-sub Directory {
-    my $self = shift;
-    return $self->{Directory};
-}
+    my $uid = $args{object}->UID;
 
-sub RotateFile {
-    my $self = shift;
-    close($self->{Filehandle})
-        or die "Can't close @{[$self->Filename]}: $!";
-    $self->{FileCount}++;
+    # Skip all dependency walking if we're cloning.  Marking UIDs as seen
+    # forces them to be visited immediately.
+    $self->{seen}{$uid}++
+        if $self->{Clone} and $uid;
 
-    open($self->{Filehandle}, ">", $self->Filename)
-        or die "Can't write to file @{[$self->Filename]}: $!";
-    $! = 0;
-    Storable::nstore_fd( \$RT::Organization, $self->{Filehandle});
-    die "Failed to write to @{[$self->Filename]}: $!" if $!;
-
-    push @{$self->{Files}}, $self->Filename;
+    return $self->SUPER::Process( @_ );
 }
 
 sub StackSize {
@@ -301,30 +413,73 @@ sub Observe {
 sub Visit {
     my $self = shift;
     my %args = (
-        object    => undef,
+        object => undef,
         @_
     );
-
-    # Rotate if we get too big
-    my $maxsize = 1024 * 1024 * $self->{MaxFileSize};
-    $self->RotateFile if tell($self->{Filehandle}) > $maxsize;
 
     # Serialize it
     my $obj = $args{object};
     warn "Writing ".$obj->UID."\n" if $self->{Verbose};
-    my @store = (
-        ref($obj),
-        $obj->UID,
-        { $obj->Serialize },
-    );
+    my @store;
+    if ($obj->isa("RT::Migrate::Serializer::IncrementalRecord")) {
+        # These are stand-ins for record removals
+        my $class = $obj->ObjectType;
+        my %data  = ( id => $obj->ObjectId );
+        # -class is used for transforms when dropping a record
+        if ($self->{Transform}{"-$class"}) {
+            $self->{Transform}{"-$class"}->(\%data,\$class)
+        }
+        @store = (
+            $class,
+            undef,
+            \%data,
+        );
+    } elsif ($self->{Clone}) {
+        # Short-circuit and get Just The Basics, Sir if we're cloning
+        my $class = ref($obj);
+        my $uid   = $obj->UID;
+        my %data  = $obj->RT::Record::Serialize( UIDs => 0 );
+
+        # +class is used when seeing a record of one class might insert
+        # a separate record into the stream
+        if ($self->{Transform}{"+$class"}) {
+            my @extra = $self->{Transform}{"+$class"}->(\%data,\$class);
+            for my $e (@extra) {
+                $! = 0;
+                Storable::nstore_fd($e, $self->{Filehandle});
+                die "Failed to write: $!" if $!;
+                $self->{ObjectCount}{$e->[0]}++;
+            }
+        }
+
+        # Upgrade the record if necessary
+        if ($self->{Transform}{$class}) {
+            $self->{Transform}{$class}->(\%data,\$class);
+        }
+
+        # Transforms set $class to undef to drop the record
+        return unless $class;
+
+        @store = (
+            $class,
+            $uid,
+            \%data,
+        );
+    } else {
+        @store = (
+            ref($obj),
+            $obj->UID,
+            { $obj->Serialize },
+        );
+    }
 
     # Write it out; nstore_fd doesn't trap failures to write, so we have
     # to; by clearing $! and checking it afterwards.
     $! = 0;
     Storable::nstore_fd(\@store, $self->{Filehandle});
-    die "Failed to write to @{[$self->Filename]}: $!" if $!;
+    die "Failed to write: $!" if $!;
 
-    $self->{ObjectCount}{ref($obj)}++;
+    $self->{ObjectCount}{$store[0]}++;
 }
 
 1;

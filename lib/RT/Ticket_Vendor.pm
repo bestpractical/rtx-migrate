@@ -39,7 +39,8 @@ sub FindDependencies {
 
 sub Serialize {
     my $self = shift;
-    my %store = $self->SUPER::Serialize;
+    my %args = (@_);
+    my %store = $self->SUPER::Serialize(@_);
 
     my $obj = RT::Ticket->new( RT->SystemUser );
     $obj->Load( $store{EffectiveId} );

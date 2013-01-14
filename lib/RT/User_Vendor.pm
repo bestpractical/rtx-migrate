@@ -52,7 +52,7 @@ sub Serialize {
         Disabled => $self->PrincipalObj->Disabled,
         Principal => $self->PrincipalObj->UID,
         PrincipalId => $self->PrincipalObj->Id,
-        $self->SUPER::Serialize,
+        $self->SUPER::Serialize(@_),
     );
 }
 
@@ -65,10 +65,16 @@ sub PreInflate {
     my $disabled      = delete $data->{Disabled};
 
     my $obj = RT::User->new( RT->SystemUser );
-    $obj->Load( $data->{Name} );
-
+    $obj->LoadByCols( Name => $data->{Name} );
+    $obj->LoadByEmail( $data->{EmailAddress} ) unless $obj->Id;
     if ($obj->Id) {
         # User already exists -- merge
+
+        # XXX: We might be merging a privileged user into an unpriv one,
+        # in which case we should probably promote the unpriv user to
+        # being privileged.  Of course, we don't know if the user being
+        # imported is privileged yet, as its group memberships show up
+        # later in the stream...
         $importer->MergeValues($obj, $data);
         $importer->SkipTransactions( $uid );
 
@@ -88,10 +94,9 @@ sub PreInflate {
         PrincipalType => 'User',
         Disabled => $disabled,
         ObjectId => 0,
-        ($data->{id} and $principal_id)
-             ? (Id => $principal_id) : (),
     );
     $importer->Resolve( $principal_uid => ref($principal), $id );
+
     $importer->Postpone(
         for => $uid,
         uid => $principal_uid,
